@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+
+die() {
+  local red="\033[31m"
+  local reset="\033[0m"
+  printf "${red}%s${reset}\n" "$*" >&2
+  exit 1
+}
+
+detect_command() {
+  if ! command -v "$1" &> /dev/null; then
+    die "Error: $1 not found"
+  fi
+}
+
+show_banner() {
+  local banner="
+------------------------------
+Did the Mets win today?
+------------------------------"
+  clear
+  echo -e "$banner\n"
+}
+
+fetch_game_data() {
+  local response=$(curl -s "$1")
+  if [ $? -ne 0 ] || [ -z "$response" ]; then
+      die "Error: Failed to fetch game data"
+  fi
+  echo "$response"
+}
+
+has_scheduled_game() {
+  local dates_count=$(echo "$1" | jq -r '.dates | length')
+  if [ "$dates_count" -eq 0 ]; then
+    die "No scheduled game today. Back to work!"
+  fi
+}
+
+show_game_score() {
+  local game="$1"
+
+  local home_team_name=$(echo "$game" | jq -r '.teams.home.team.name')
+  local home_score=$(echo "$game" | jq -r '.teams.home.score')
+  local away_team_name=$(echo "$game" | jq -r '.teams.away.team.name')
+  local away_score=$(echo "$game" | jq -r '.teams.away.score')
+
+  echo ""
+  echo "$away_team_name: $away_score"
+  echo "$home_team_name: $home_score"
+}
+
+show_outcome_message() {
+  local game="$1"
+  local team_id="$2"
+
+  local home_team_id=$(echo "$game" | jq -r '.teams.home.team.id')
+  local home_is_winner=$(echo "$game" | jq -r '.teams.home.isWinner')
+  local away_team_id=$(echo "$game" | jq -r '.teams.away.team.id')
+  local away_is_winner=$(echo "$game" | jq -r '.teams.away.isWinner')
+
+  if [ "$home_team_id" = "$team_id" ] && [ "$home_is_winner" = "true" ]; then
+    echo "🎉 YES! They won! 🎉"
+  elif [ "$away_team_id" = "$team_id" ] && [ "$away_is_winner" = "true" ]; then
+    echo "🎉 YES! They won! 🎉"
+  else
+    echo "Nope. They lost. 😞"
+  fi
+}
+
+main() {
+  detect_command "curl"
+  detect_command "jq"
+  show_banner
+
+  local today=$(date +%m/%d/%Y)
+  local team_id=121
+  local api_url="https://statsapi.mlb.com/api/v1/schedule?sportId=1&teamId=$team_id&date=$today"
+
+  local json_data=$(fetch_game_data "$api_url")
+  has_scheduled_game "$json_data"
+
+  local game=$(echo "$json_data" | jq -r '.dates[0].games[0]')
+  local coded_game_state=$(echo "$game" | jq -r '.status.codedGameState')
+  local detailed_state=$(echo "$game" | jq -r '.status.detailedState')
+
+  case "$coded_game_state" in
+    "F")
+      show_outcome_message "$game" "$team_id"
+      show_game_score "$game"
+      ;;
+    "I")
+      echo "Game hasn't finished! [$detailed_state]"
+      show_game_score "$game"
+      ;;
+    "P"|"S")
+      echo "Relax. Game hasn't started yet! [$detailed_state]"
+      ;;
+    *)
+      echo "Not sure. [$detailed_state]"
+      ;;
+  esac
+
+  return 0
+}
+
+main
